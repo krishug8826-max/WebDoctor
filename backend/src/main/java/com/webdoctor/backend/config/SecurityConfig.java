@@ -38,6 +38,9 @@ public class SecurityConfig {
     @Value("${webdoctor.jwt.secret}")
     private String jwtSecret;
 
+    @Value("${webdoctor.cors.allowed-origins:http://localhost:5173}")
+    private java.util.List<String> allowedOrigins;
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
 
@@ -88,7 +91,7 @@ public class SecurityConfig {
 
         CorsConfiguration configuration = new CorsConfiguration();
 
-        configuration.setAllowedOrigins(java.util.List.of("http://localhost:5173"));
+        configuration.setAllowedOrigins(allowedOrigins);
         configuration.setAllowedMethods(
             java.util.List.of("GET", "POST", "PUT", "DELETE", "OPTIONS")
         );

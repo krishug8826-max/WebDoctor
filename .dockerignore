@@ -1,0 +1,17 @@
+﻿.git
+.github
+**/node_modules/
+**/target/
+**/dist/
+**/build/
+**/.idea/
+**/.vscode/
+**/.env*
+**/*.log
+*.pem
+*.key
+*.p12
+*.jks
+database-backups/
+backend/lighthouse-test.json
+backend/src/main/resources/application.properties

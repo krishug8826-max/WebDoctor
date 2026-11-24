@@ -1,4 +1,4 @@
-﻿import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -25,7 +25,7 @@ const lighthouseCli = path.join(
 );
 
 const chromePath =
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+    process.env.CHROME_PATH || (process.platform === "win32" ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" : "/usr/bin/chromium");
 
 function killProcessTree(child) {
     if (!child.pid) return;
@@ -282,7 +282,7 @@ async function runLighthouse(url, strategy) {
             ...(strategy === "desktop"
                 ? ["--preset=desktop"]
                 : ["--form-factor=mobile"]),
-            "--chrome-flags=--headless=new"
+            process.platform === "win32" ? "--chrome-flags=--headless=new" : "--chrome-flags=--headless=new --no-sandbox --disable-dev-shm-usage"
         ]);
 
         const reportText = await readFile(outputPath, "utf8");
