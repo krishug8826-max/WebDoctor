@@ -1,8 +1,8 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
 import Auth from "./Auth";
 
-const API_BASE = "http://localhost:8081/api";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8081/api").replace(/\/$/, "");
 const API_URL = `${API_BASE}/scan`;
 const HISTORY_URL = `${API_BASE}/scan/history`;
 
