@@ -1,21 +1,31 @@
 package com.webdoctor.backend.scanner.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.webdoctor.backend.scanner.dto.LighthouseAnalysisResponse;
 import com.webdoctor.backend.scanner.dto.LighthouseAnalysisResponse.LighthouseResult;
+import com.webdoctor.backend.scanner.dto.LighthouseAnalysisResponse.LighthouseAudit;
+import com.webdoctor.backend.scanner.dto.LighthouseAnalysisResponse.LighthouseMetric;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import org.springframework.beans.factory.annotation.Autowired;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Iterator;
 
 @Service
 public class LighthouseAnalysisService {
@@ -23,59 +33,44 @@ public class LighthouseAnalysisService {
     private static final Logger log =
             LoggerFactory.getLogger(LighthouseAnalysisService.class);
 
-    private static final long DEFAULT_TIMEOUT_SECONDS = 130;
+    private static final String API_ENDPOINT =
+            "https://www.googleapis.com/pagespeedonline/v5/runPagespeed";
+
+    private static final Duration REQUEST_TIMEOUT =
+            Duration.ofSeconds(180);
 
     private final ObjectMapper objectMapper;
-    private final Path runnerPath;
-    private final long timeoutSeconds;
+    private final String apiKey;
+    private final HttpClient httpClient;
+    private final PageSpeedGateway gateway;
 
-    // Production constructor — Spring uses this.
-    // Production constructor — Spring uses this.
-@Autowired
-
-    public LighthouseAnalysisService(ObjectMapper objectMapper) {
-        this(
-                objectMapper,
-                resolveRunnerPath(),
-                DEFAULT_TIMEOUT_SECONDS
-        );
-    }
-
-    // Package-private constructor — used by automated tests.
-    LighthouseAnalysisService(
+    @Autowired
+    public LighthouseAnalysisService(
             ObjectMapper objectMapper,
-            Path runnerPath,
-            long timeoutSeconds
+            @Value("${PAGESPEED_API_KEY:}") String apiKey
     ) {
-        if (timeoutSeconds <= 0) {
-            throw new IllegalArgumentException(
-                    "Timeout must be greater than zero."
-            );
-        }
 
         this.objectMapper = objectMapper;
-        this.runnerPath = runnerPath.toAbsolutePath();
-        this.timeoutSeconds = timeoutSeconds;
+        this.apiKey = apiKey == null ? "" : apiKey.trim();
+
+        this.httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(20))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
+
+        this.gateway = this::fetchFromGoogle;
     }
 
-    private static Path resolveRunnerPath() {
+    // Constructor for unit tests.
+    LighthouseAnalysisService(
+            ObjectMapper objectMapper,
+            PageSpeedGateway gateway
+    ) {
 
-        Path workingDirectory = Path.of(
-                System.getProperty("user.dir")
-        ).toAbsolutePath();
-
-        Path backendDirectory = workingDirectory.resolve("backend");
-
-        if (Files.exists(
-                backendDirectory.resolve("scripts")
-                        .resolve("lighthouse-runner.mjs")
-        )) {
-            workingDirectory = backendDirectory;
-        }
-
-        return workingDirectory
-                .resolve("scripts")
-                .resolve("lighthouse-runner.mjs");
+        this.objectMapper = objectMapper;
+        this.apiKey = "";
+        this.httpClient = null;
+        this.gateway = gateway;
     }
 
     public LighthouseAnalysisResponse analyze(String url) {
@@ -104,13 +99,13 @@ public class LighthouseAnalysisService {
 
         String message = switch (status) {
             case "COMPLETED" ->
-                    "Mobile and Desktop Lighthouse audits completed successfully.";
+                    "Mobile and Desktop PageSpeed audits completed successfully.";
 
             case "PARTIAL" ->
-                    "Only one Lighthouse audit completed successfully.";
+                    "Only one PageSpeed audit completed successfully.";
 
             default ->
-                    "Lighthouse audits could not be completed.";
+                    "PageSpeed audits could not be completed.";
         };
 
         return new LighthouseAnalysisResponse(
@@ -127,119 +122,320 @@ public class LighthouseAnalysisService {
     ) {
 
         try {
-            return runAudit(url, strategy);
+            JsonNode response = gateway.fetch(url, strategy);
+
+            return mapResponse(response, strategy);
 
         } catch (Exception e) {
 
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+
             log.error(
-                    "Lighthouse {} audit failed for URL: {}. Reason: {}",
+                    "PageSpeed {} audit failed for URL: {}. Reason: {}",
                     strategy,
                     url,
-                    e.getMessage(),
-                    e
+                    e.getMessage()
             );
 
             return failedResult(strategy);
         }
     }
 
-    private LighthouseResult runAudit(
+    private JsonNode fetchFromGoogle(
             String url,
             String strategy
     ) throws Exception {
 
-        if (!Files.exists(runnerPath)) {
+        StringBuilder query = new StringBuilder(API_ENDPOINT)
+                .append("?url=")
+                .append(encode(url))
+                .append("&strategy=")
+                .append(encode(strategy));
+
+        query.append("&category=PERFORMANCE");
+        query.append("&category=ACCESSIBILITY");
+        query.append("&category=BEST_PRACTICES");
+        query.append("&category=SEO");
+
+        if (!apiKey.isBlank()) {
+            query.append("&key=").append(encode(apiKey));
+        }
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(query.toString()))
+                .timeout(REQUEST_TIMEOUT)
+                .header("Accept", "application/json")
+                .GET()
+                .build();
+
+        HttpResponse<String> response = httpClient.send(
+                request,
+                HttpResponse.BodyHandlers.ofString(
+                        StandardCharsets.UTF_8
+                )
+        );
+
+        int statusCode = response.statusCode();
+
+        if (statusCode < 200 || statusCode >= 300) {
+
+            String details = extractApiError(response.body());
+
+            if (statusCode == 429) {
+                throw new IOException(
+                        "Google PageSpeed API rate limit or quota exceeded. "
+                                + details
+                );
+            }
+
             throw new IOException(
-                    "Lighthouse runner script not found: " + runnerPath
+                    "Google PageSpeed API returned HTTP "
+                            + statusCode + ". " + details
             );
         }
 
-        ProcessBuilder processBuilder = new ProcessBuilder(
-                "node",
-                runnerPath.toString(),
-                url,
-                strategy
+        return objectMapper.readTree(response.body());
+    }
+
+    private String encode(String value) {
+
+        return URLEncoder.encode(
+                value,
+                StandardCharsets.UTF_8
         );
+    }
 
-        processBuilder.directory(
-                runnerPath.getParent().getParent().toFile()
-        );
+    private String extractApiError(String body) {
 
-        Process process = processBuilder.start();
+        try {
 
-        CompletableFuture<String> stdout =
-                readOutput(process.getInputStream());
+            JsonNode error = objectMapper.readTree(body)
+                    .path("error")
+                    .path("message");
 
-        CompletableFuture<String> stderr =
-                readOutput(process.getErrorStream());
+            if (!error.isMissingNode() && !error.isNull()) {
+                return error.asText();
+            }
 
-        boolean completed = process.waitFor(
-                timeoutSeconds,
-                TimeUnit.SECONDS
-        );
+        } catch (Exception ignored) {
+            // Do not expose the raw response body in logs.
+        }
 
-        if (!completed) {
+        return "No additional error details available.";
+    }
 
-            log.error(
-                    "Lighthouse {} audit timed out after {} seconds. Terminating process tree.",
-                    strategy,
-                    timeoutSeconds
+    private LighthouseResult mapResponse(
+            JsonNode response,
+            String strategy
+    ) throws IOException {
+
+        JsonNode report = response.path("lighthouseResult");
+
+        if (!report.isObject()) {
+            throw new IOException(
+                    "Google PageSpeed response does not contain lighthouseResult."
             );
+        }
 
-            process.descendants().forEach(child -> {
-                try {
-                    child.destroyForcibly();
+        JsonNode runtimeError = report.path("runtimeError");
 
-                } catch (Exception e) {
-                    log.warn(
-                            "Could not terminate Lighthouse child process: {}",
-                            child.pid(),
-                            e
-                    );
+        if (!runtimeError.isMissingNode()
+                && !runtimeError.isNull()
+                && runtimeError.has("message")) {
+
+            throw new IOException(
+                    runtimeError.path("message").asText()
+            );
+        }
+
+        JsonNode categories = report.path("categories");
+        JsonNode audits = report.path("audits");
+
+        AuditLists auditLists = getAuditLists(
+                categories,
+                audits
+        );
+
+        return new LighthouseResult(
+                "COMPLETED",
+                strategy,
+
+                getScore(categories, "performance"),
+
+                getMetric(audits, "first-contentful-paint"),
+                getMetric(audits, "largest-contentful-paint"),
+                getMetric(audits, "total-blocking-time"),
+                getMetric(audits, "cumulative-layout-shift"),
+                getMetric(audits, "speed-index"),
+
+                textOrNull(report, "finalUrl"),
+                textOrNull(report, "fetchTime"),
+
+                getScore(categories, "accessibility"),
+                getScore(categories, "best-practices"),
+                getScore(categories, "seo"),
+
+                auditLists.opportunities(),
+                auditLists.diagnostics(),
+                auditLists.failedAudits()
+        );
+    }
+
+    private Integer getScore(
+            JsonNode categories,
+            String categoryId
+    ) {
+
+        JsonNode score = categories
+                .path(categoryId)
+                .path("score");
+
+        if (!score.isNumber()) {
+            return null;
+        }
+
+        return (int) Math.round(score.asDouble() * 100);
+    }
+
+    private LighthouseMetric getMetric(
+            JsonNode audits,
+            String auditId
+    ) {
+
+        JsonNode audit = audits.path(auditId);
+
+        if (!audit.isObject()) {
+            return null;
+        }
+
+        return new LighthouseMetric(
+                numberOrNull(audit, "numericValue"),
+                textOrNull(audit, "displayValue"),
+                numberOrNull(audit, "score")
+        );
+    }
+
+    private AuditLists getAuditLists(
+            JsonNode categories,
+            JsonNode audits
+    ) {
+
+        Map<String, LighthouseAudit> opportunities =
+                new LinkedHashMap<>();
+
+        Map<String, LighthouseAudit> diagnostics =
+                new LinkedHashMap<>();
+
+        Map<String, LighthouseAudit> failedAudits =
+                new LinkedHashMap<>();
+
+        Iterator<Map.Entry<String, JsonNode>> categoryIterator =
+                categories.fields();
+
+        while (categoryIterator.hasNext()) {
+
+            JsonNode category = categoryIterator.next().getValue();
+
+            JsonNode references = category.path("auditRefs");
+
+            if (!references.isArray()) {
+                continue;
+            }
+
+            for (JsonNode reference : references) {
+
+                String id = textOrNull(reference, "id");
+
+                if (id == null) {
+                    continue;
                 }
-            });
 
-            process.destroyForcibly();
+                JsonNode audit = audits.path(id);
 
-            process.waitFor(10, TimeUnit.SECONDS);
+                if (!audit.isObject()) {
+                    continue;
+                }
 
-            stdout.cancel(true);
-            stderr.cancel(true);
+                LighthouseAudit item = toAudit(id, audit);
 
-            throw new TimeoutException(
-                    "Lighthouse " + strategy
-                            + " audit timed out after "
-                            + timeoutSeconds + " seconds."
-            );
+                String group = textOrNull(reference, "group");
+
+                Double score = numberOrNull(audit, "score");
+
+                if (("load-opportunities".equals(group)
+                        || "budgets".equals(group))
+                        && score != null
+                        && score < 1) {
+
+                    opportunities.putIfAbsent(id, item);
+                }
+
+                if ("diagnostics".equals(group)) {
+                    diagnostics.putIfAbsent(id, item);
+                }
+
+                if (score != null && score < 1) {
+                    failedAudits.putIfAbsent(id, item);
+                }
+            }
         }
 
-        String output = stdout.get(10, TimeUnit.SECONDS);
-        String error = stderr.get(10, TimeUnit.SECONDS);
-
-        if (process.exitValue() != 0) {
-            throw new IOException(
-                    "Lighthouse process failed: " + error
-            );
-        }
-
-        if (output == null || output.isBlank()) {
-            throw new IOException(
-                    "Lighthouse returned an empty response."
-            );
-        }
-
-        LighthouseResult result = objectMapper.readValue(
-                output,
-                LighthouseResult.class
+        return new AuditLists(
+                new ArrayList<>(opportunities.values()),
+                new ArrayList<>(diagnostics.values()),
+                new ArrayList<>(failedAudits.values())
         );
+    }
 
-        if (!"COMPLETED".equals(result.status())) {
-            throw new IOException(
-                    "Lighthouse audit did not complete."
-            );
+    private LighthouseAudit toAudit(
+            String id,
+            JsonNode audit
+    ) {
+
+        JsonNode details = audit.path("details");
+
+        return new LighthouseAudit(
+                id,
+                textOrNull(audit, "title"),
+                textOrNull(audit, "description"),
+                textOrNull(audit, "displayValue"),
+                numberOrNull(audit, "score"),
+                textOrNull(audit, "scoreDisplayMode"),
+                numberOrNull(audit, "numericValue"),
+                textOrNull(audit, "numericUnit"),
+                numberOrNull(details, "overallSavingsMs"),
+                numberOrNull(details, "overallSavingsBytes")
+        );
+    }
+
+    private String textOrNull(
+            JsonNode node,
+            String field
+    ) {
+
+        JsonNode value = node.path(field);
+
+        if (value.isMissingNode() || value.isNull()) {
+            return null;
         }
 
-        return result;
+        return value.asText();
+    }
+
+    private Double numberOrNull(
+            JsonNode node,
+            String field
+    ) {
+
+        JsonNode value = node.path(field);
+
+        if (!value.isNumber()) {
+            return null;
+        }
+
+        return value.asDouble();
     }
 
     private LighthouseResult failedResult(String strategy) {
@@ -254,26 +450,25 @@ public class LighthouseAnalysisService {
                 null,
                 null,
                 null,
-                null
+                null,
+                null,
+                null,
+                null,
+                List.of(),
+                List.of(),
+                List.of()
         );
     }
 
-    private CompletableFuture<String> readOutput(
-            java.io.InputStream inputStream
+    private record AuditLists(
+            List<LighthouseAudit> opportunities,
+            List<LighthouseAudit> diagnostics,
+            List<LighthouseAudit> failedAudits
     ) {
+    }
 
-        return CompletableFuture.supplyAsync(() -> {
-
-            try (inputStream) {
-
-                return new String(
-                        inputStream.readAllBytes(),
-                        StandardCharsets.UTF_8
-                );
-
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        });
+    @FunctionalInterface
+    interface PageSpeedGateway {
+        JsonNode fetch(String url, String strategy) throws Exception;
     }
 }
