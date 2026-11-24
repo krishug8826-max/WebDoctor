@@ -1,0 +1,25 @@
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local application configuration
+backend/src/main/resources/application.properties
+
+# Database backups
+database-backups/
+
+# Dependencies in all project folders
+**/node_modules/
+
+# Temporary and backup files
+*.backup*
+*.old-backup
+backend/lighthouse-test.json

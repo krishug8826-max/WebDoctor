@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebDoctor API Analyzer Test</title>
+</head>
+<body>
+
+<h1>WebDoctor API Detection Test</h1>
+
+<script>
+    // 1. Fetch API
+    fetch("/api/users");
+
+    // 2. Direct Axios
+    axios.get("/api/products");
+
+    // 3. Axios POST
+    axios.post("/api/orders");
+
+    // 4. Axios Instance
+    const apiClient = axios.create({
+        baseURL: "/api"
+    });
+
+    apiClient.get("/customers");
+
+    // 5. XMLHttpRequest
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", "/api/employees");
+
+    // 6. jQuery AJAX
+    $.ajax({
+        url: "/api/categories",
+        method: "GET"
+    });
+
+    // 7. Dynamic API
+    const userId = 10;
+    fetch(`/api/users/${userId}`);
+
+    // 8. GraphQL
+    const client = new ApolloClient({
+        uri: "/graphql"
+    });
+
+</script>
+
+</body>
+</html>
