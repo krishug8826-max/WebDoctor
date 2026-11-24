@@ -1,4 +1,4 @@
-﻿@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 * {
   box-sizing: border-box;
@@ -2727,7 +2727,7 @@ td strong {
 }
 
 .auth-field input::placeholder {
-  color: #65728c;
+  color: #a6b4ca;
 }
 
 .auth-field input:focus {
@@ -2809,7 +2809,7 @@ td strong {
   justify-content: center;
   align-items: center;
   gap: 8px;
-  color: #71809b;
+  color: #a6b4ca;
   font-size: 10px;
 }
 
