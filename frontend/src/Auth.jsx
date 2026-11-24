@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-const AUTH_URL = "http://localhost:8081/api/auth";
+const AUTH_URL = `${(import.meta.env.VITE_API_BASE_URL || "http://localhost:8081/api").replace(/\/$/, "")}/auth`;
 
 function Auth({ onLogin }) {
   const [mode, setMode] = useState("login");
